@@ -1,31 +1,40 @@
-"""Shared test fixtures using moto for AWS service mocking."""
+"""
+Shared pytest fixtures for the AI Memo Tracker backend test suite.
+
+Uses moto to mock AWS services so tests run without real AWS credentials.
+"""
 
 import os
-
 import boto3
 import pytest
 from moto import mock_aws
 
-from backend.shared.config import TABLE_NAME, AWS_REGION
 
+# ---------------------------------------------------------------------------
+# Environment variables — set before any application code imports config
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _set_env(monkeypatch):
+    """Inject test-safe environment variables for every test."""
+    monkeypatch.setenv("TABLE_NAME", "MemoTrackerTable")
+    monkeypatch.setenv("BIOMETRIC_BUCKET", "memo-tracker-biometric-dev")
+    monkeypatch.setenv("AUDIO_BUCKET", "memo-tracker-audio-dev")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+
+
+# ---------------------------------------------------------------------------
+# DynamoDB table fixture
+# ---------------------------------------------------------------------------
 
 @pytest.fixture
-def _aws_env(monkeypatch):
-    """Set fake AWS credentials for moto."""
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
-    monkeypatch.setenv("AWS_SECURITY_TOKEN", "testing")
-    monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
-    monkeypatch.setenv("AWS_DEFAULT_REGION", AWS_REGION)
-
-
-@pytest.fixture
-def dynamodb_table(_aws_env):
-    """Create a mocked DynamoDB table with GSIs."""
+def dynamodb_table():
+    """Create a mocked DynamoDB table matching the single-table design."""
     with mock_aws():
-        client = boto3.resource("dynamodb", region_name=AWS_REGION)
-        table = client.create_table(
-            TableName=TABLE_NAME,
+        client = boto3.client("dynamodb", region_name="us-east-1")
+        client.create_table(
+            TableName="MemoTrackerTable",
             KeySchema=[
                 {"AttributeName": "PK", "KeyType": "HASH"},
                 {"AttributeName": "SK", "KeyType": "RANGE"},
@@ -58,12 +67,43 @@ def dynamodb_table(_aws_env):
             ],
             BillingMode="PAY_PER_REQUEST",
         )
-        table.wait_until_exists()
+        table = boto3.resource("dynamodb", region_name="us-east-1").Table(
+            "MemoTrackerTable"
+        )
         yield table
 
 
+# ---------------------------------------------------------------------------
+# S3 bucket fixtures
+# ---------------------------------------------------------------------------
+
 @pytest.fixture
-def mock_all_aws(_aws_env):
-    """Context manager for mocking all AWS services."""
+def s3_biometric_bucket():
+    """Create a mocked S3 bucket for biometric data."""
     with mock_aws():
-        yield
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="memo-tracker-biometric-dev")
+        yield client
+
+
+@pytest.fixture
+def s3_audio_bucket():
+    """Create a mocked S3 bucket for audio and attachments."""
+    with mock_aws():
+        client = boto3.client("s3", region_name="us-east-1")
+        client.create_bucket(Bucket="memo-tracker-audio-dev")
+        yield client
+
+
+# ---------------------------------------------------------------------------
+# Cognito fixture
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def cognito_user_pool():
+    """Create a mocked Cognito user pool."""
+    with mock_aws():
+        client = boto3.client("cognito-idp", region_name="us-east-1")
+        response = client.create_user_pool(PoolName="MemoTrackerPool")
+        pool_id = response["UserPool"]["Id"]
+        yield client, pool_id
