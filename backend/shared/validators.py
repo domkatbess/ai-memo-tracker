@@ -6,14 +6,14 @@ EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
 
 def check_required_fields(data: dict, required: list[str]) -> list[str]:
-    """Return a list of field names that are missing or empty in *data*.
+    """Check that all required fields are present and non-empty.
 
     Args:
-        data: The dict to validate.
-        required: Field names that must be present and non-empty.
+        data: Dictionary of field values.
+        required: List of required field names.
 
     Returns:
-        List of missing/empty field names (empty list means all present).
+        List of missing field names.
     """
     missing = []
     for field in required:
@@ -24,7 +24,11 @@ def check_required_fields(data: dict, required: list[str]) -> list[str]:
 
 
 def validate_email(email: str) -> bool:
-    """Return True if *email* matches a basic email format."""
+    """Validate email format.
+
+    Returns:
+        True if the email matches a valid format, False otherwise.
+    """
     if not email or not isinstance(email, str):
         return False
     return bool(EMAIL_REGEX.match(email))

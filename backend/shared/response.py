@@ -7,11 +7,11 @@ def success_response(data, status_code=200):
     """Return a successful API Gateway response.
 
     Args:
-        data: Response body data (dict or list).
+        data: Dictionary to serialize as the response body.
         status_code: HTTP status code (default 200).
 
     Returns:
-        dict: API Gateway proxy response.
+        API Gateway compatible response dict.
     """
     return {
         "statusCode": status_code,
@@ -25,17 +25,17 @@ def error_response(message, error_code, status_code, details=None):
 
     Args:
         message: Human-readable error message.
-        error_code: Machine-readable error code (e.g. FORBIDDEN, VALIDATION_ERROR).
+        error_code: Machine-readable error code string.
         status_code: HTTP status code.
-        details: Optional dict with additional error context.
+        details: Optional dict with additional error details.
 
     Returns:
-        dict: API Gateway proxy response with error body.
+        API Gateway compatible response dict.
     """
     body = {
         "error": message,
         "error_code": error_code,
-        "details": details or {},
+        "details": details if details else {},
     }
     return {
         "statusCode": status_code,
