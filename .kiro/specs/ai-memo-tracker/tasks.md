@@ -1,0 +1,530 @@
+# Implementation Plan: AI-Powered Government Memo Tracker
+
+## Overview
+
+This plan breaks the AI Memo Tracker feature into incremental coding tasks. The backend is Python 3.12 on AWS Lambda with DynamoDB, S3, Cognito, Rekognition, Transcribe, and Polly. The frontend is React Native. Each top-level task includes sub-tasks for creating a Git issue, creating a feature branch, implementing the code, committing with issue references, and pushing the branch. Property-based tests use Hypothesis; unit tests use pytest and Jest.
+
+## Tasks
+
+- [-] 1. Set up project structure, shared utilities, and DynamoDB table definition
+  - [x] 1.1 Create Git issue for project scaffolding
+    - Run `gh issue create --title "Set up project structure, shared utilities, and DynamoDB table" --body "Scaffold backend and frontend directories, shared config, DynamoDB table definition, and test infrastructure."`
+  - [-] 1.2 Create feature branch
+    - Run `git checkout -b feature/project-scaffolding` from main
+  - [ ] 1.3 Implement project scaffolding
+    - Create backend directory structure: `backend/`, `backend/auth/`, `backend/memo/`, `backend/voice/`, `backend/user/`, `backend/shared/`, `backend/tests/`
+    - Create `backend/shared/config.py` with environment variables, table name, bucket names, region
+    - Create `backend/shared/dynamodb.py` with DynamoDB table resource helper and single-table key builders (`memo_pk`, `memo_sk`, `user_pk`, `log_sk`, `note_sk`, `session_pk`, etc.)
+    - Create `backend/shared/response.py` with standardized API response helpers (success, error with error_code and details)
+    - Create `backend/shared/validators.py` with common validation functions (required fields check, email format, ISO date format)
+    - Create `backend/requirements.txt` with boto3, moto, pytest, hypothesis
+    - Create `backend/tests/conftest.py` with moto DynamoDB/S3/Cognito fixtures, table creation with GSI1 and GSI2 as defined in design
+    - Create React Native app scaffold under `mobile/` with navigation structure for all screens listed in design
+    - _Requirements: 10.1, 10.2, 10.3, 10.8, 11.1_
+  - [ ] 1.4 Commit and push
+    - Stage all files, commit with message `Refs #<issue_number> - Scaffold project structure, shared utilities, and DynamoDB table definition`
+    - Run `git push -u origin feature/project-scaffolding`
+
+- [ ] 2. Implement Memo Service — CRUD operations
+  - [ ] 2.1 Create Git issue for Memo Service
+    - Run `gh issue create --title "Implement Memo Service CRUD operations" --body "Implement create_memo, get_memo, search_memos, add_memo_note, and get_access_log Lambda handlers with DynamoDB single-table design."`
+  - [ ] 2.2 Create feature branch
+    - Run `git checkout -b feature/memo-service` from main
+  - [ ] 2.3 Implement create_memo Lambda handler
+    - Create `backend/memo/create_memo.py`
+    - Validate required fields: title, memo_type, memo_date
+    - Validate conditional fields: person_brought_in (if incoming), person_took_out (if outgoing)
+    - Generate UUID for memo_id, set recorded_at to current UTC ISO 8601
+    - Build DynamoDB item with PK, SK, GSI1PK, GSI1SK, GSI2PK, GSI2SK as per design
+    - Return 201 with memo data or 400 with missing_fields error
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6_
+  - [ ] 2.4 Implement get_memo Lambda handler
+    - Create `backend/memo/get_memo.py`
+    - Retrieve memo by PK=`MEMO#{id}`, SK=`METADATA`
+    - On successful retrieval, create an Access_Log entry (PK=`MEMO#{id}`, SK=`LOG#{timestamp}#{user_id}`) with user_id, user_name, action="VIEW", timestamp
+    - Return 200 with memo data or 404
+    - _Requirements: 2.5, 3.1_
+  - [ ] 2.5 Implement search_memos Lambda handler
+    - Create `backend/memo/search_memos.py`
+    - Support query parameters: title (scan with filter contains), date_from/date_to (GSI1 query), memo_type (GSI1 query), person_name (GSI2 query)
+    - For title search: DynamoDB scan with case-insensitive contains filter
+    - For type + date: query GSI1 with GSI1PK=`TYPE#{type}`, GSI1SK between `DATE#{from}` and `DATE#{to}`
+    - For person + date: query GSI2 with GSI2PK=`PERSON#{name}`, GSI2SK between dates
+    - Return 200 with memos array and count
+    - _Requirements: 2.1, 2.2, 2.3, 2.4_
+  - [ ] 2.6 Implement add_memo_note Lambda handler
+    - Create `backend/memo/add_memo_note.py`
+    - Validate memo exists, then put note item with PK=`MEMO#{id}`, SK=`NOTE#{timestamp}`
+    - Store note_text, created_by, created_at, source ("voice" or "text")
+    - Return 201 with note data
+    - _Requirements: 4.2, 4.3_
+  - [ ] 2.7 Implement get_access_log Lambda handler
+    - Create `backend/memo/get_access_log.py`
+    - Enforce superuser-only access (check user role from token claims)
+    - Query PK=`MEMO#{id}`, SK begins_with `LOG#`, ScanIndexForward=False for descending order
+    - Return 200 with access log entries
+    - _Requirements: 3.2, 3.3, 3.4, 8.1_
+  - [ ]* 2.8 Write property test: Memo creation round-trip (Property 1)
+    - **Property 1: Memo creation round-trip**
+    - Use Hypothesis to generate random valid memo inputs (title, memo_type, memo_date, person fields)
+    - Create memo then retrieve by ID; assert all original fields preserved, memo_id is unique UUID, recorded_at is valid UTC ISO 8601
+    - **Validates: Requirements 1.1, 1.2, 1.5, 2.5**
+  - [ ]* 2.9 Write property test: Memo conditional field validation (Property 2)
+    - **Property 2: Memo conditional field validation**
+    - Use Hypothesis to generate memo inputs with randomly removed required fields
+    - Assert system rejects with error identifying specific missing fields
+    - **Validates: Requirements 1.3, 1.4, 1.6**
+  - [ ]* 2.10 Write property test: Title search completeness and precision (Property 3)
+    - **Property 3: Title search completeness and precision**
+    - Generate random memo sets and random search substrings
+    - Assert search returns exactly memos whose titles contain the search string (case-insensitive)
+    - **Validates: Requirements 2.1**
+  - [ ]* 2.11 Write property test: Date range search correctness (Property 4)
+    - **Property 4: Date range search correctness**
+    - Generate random memo sets and random date ranges
+    - Assert search returns exactly memos with memo_date within [start, end] inclusive
+    - **Validates: Requirements 2.2**
+  - [ ]* 2.12 Write property test: Memo type filter correctness (Property 5)
+    - **Property 5: Memo type filter correctness**
+    - Generate random memo sets and random type choice
+    - Assert search returns exactly memos matching the chosen type
+    - **Validates: Requirements 2.3**
+  - [ ]* 2.13 Write property test: Person name search correctness (Property 6)
+    - **Property 6: Person name search correctness**
+    - Generate random memo sets and random person names
+    - Assert search returns exactly memos where person appears as brought_in or took_out
+    - **Validates: Requirements 2.4**
+  - [ ]* 2.14 Write property test: Access log creation invariant (Property 7)
+    - **Property 7: Access log creation invariant**
+    - Generate random user/memo combinations, call get_memo
+    - Assert access log entry created with correct user_id, memo_id, valid timestamp, action
+    - **Validates: Requirements 3.1**
+  - [ ]* 2.15 Write property test: Access log descending sort order (Property 8)
+    - **Property 8: Access log descending sort order**
+    - Generate random access log entries with random timestamps
+    - Assert retrieval returns entries in strictly descending timestamp order
+    - **Validates: Requirements 3.2**
+  - [ ]* 2.16 Write property test: Access log immutability (Property 9)
+    - **Property 9: Access log immutability**
+    - Generate random existing log entries, attempt modifications/deletions
+    - Assert all attempts rejected and original entries unchanged
+    - **Validates: Requirements 3.4**
+  - [ ]* 2.17 Write property test: Memo note field completeness (Property 10)
+    - **Property 10: Memo note field completeness**
+    - Generate random note text and random users
+    - Assert stored note contains note_text, creating user identity, valid creation timestamp
+    - **Validates: Requirements 4.3**
+  - [ ] 2.18 Commit and push
+    - Stage all memo service files, commit with message `Refs #<issue_number> - Implement Memo Service CRUD operations and property tests`
+    - Run `git push -u origin feature/memo-service`
+
+- [ ] 3. Checkpoint — Memo Service verification
+  - Ensure all memo service tests pass, ask the user if questions arise.
+
+- [ ] 4. Implement Auth Service — Biometric authentication via Cognito custom auth flow
+  - [ ] 4.1 Create Git issue for Auth Service
+    - Run `gh issue create --title "Implement Auth Service with biometric authentication" --body "Implement Cognito custom auth flow Lambda triggers for facial and voice recognition authentication."`
+  - [ ] 4.2 Create feature branch
+    - Run `git checkout -b feature/auth-service` from main
+  - [ ] 4.3 Implement define_auth_challenge Lambda trigger
+    - Create `backend/auth/define_auth_challenge.py`
+    - Determine which challenge to issue based on session state (facial first, voice as fallback)
+    - Track failed attempts per method; after 3 facial failures, switch to voice; after 3 voice failures, lock account
+    - _Requirements: 6.1, 6.3, 6.5, 7.5_
+  - [ ] 4.4 Implement create_auth_challenge Lambda trigger
+    - Create `backend/auth/create_auth_challenge.py`
+    - Create challenge metadata for the client specifying auth type ("facial" or "voice")
+    - Include public challenge parameters for the mobile app
+    - _Requirements: 6.1, 7.1_
+  - [ ] 4.5 Implement verify_auth_challenge Lambda trigger
+    - Create `backend/auth/verify_auth_challenge.py`
+    - For facial auth: retrieve reference face from S3, call Rekognition CompareFaces, check confidence >= 95%
+    - For voice auth: retrieve reference voiceprint embedding from S3, extract embedding from submitted sample, compute cosine similarity, check threshold
+    - Update failed_auth_attempts on user record; lock account and notify superuser after 3+3 failures
+    - Return answerCorrect: true/false
+    - _Requirements: 6.2, 6.3, 7.1, 7.2, 7.3, 7.5_
+  - [ ]* 4.6 Write property test: Facial auth confidence threshold (Property 12)
+    - **Property 12: Facial auth confidence threshold**
+    - Use Hypothesis to generate random float confidence scores in [0, 100]
+    - Assert authentication succeeds if and only if score >= 95.0
+    - **Validates: Requirements 6.2, 6.3**
+  - [ ]* 4.7 Write property test: Account lockout after repeated failures (Property 13)
+    - **Property 13: Account lockout after repeated failures**
+    - Simulate sequences of facial and voice auth failures
+    - Assert account locked after 3 facial + 3 voice failures, superuser notified
+    - **Validates: Requirements 7.5**
+  - [ ] 4.8 Commit and push
+    - Stage all auth service files, commit with message `Refs #<issue_number> - Implement Auth Service with biometric Cognito custom auth flow`
+    - Run `git push -u origin feature/auth-service`
+
+- [ ] 5. Implement User Management Service — Superuser operations
+  - [ ] 5.1 Create Git issue for User Management Service
+    - Run `gh issue create --title "Implement User Management Service" --body "Implement create_user, update_user, deactivate_user, enroll_face, and enroll_voice Lambda handlers with superuser authorization."`
+  - [ ] 5.2 Create feature branch
+    - Run `git checkout -b feature/user-management-service` from main
+  - [ ] 5.3 Implement superuser authorization middleware
+    - Create `backend/shared/auth_middleware.py`
+    - Extract user role from Cognito JWT claims in API Gateway event
+    - Return 403 FORBIDDEN error for non-superuser users on protected endpoints
+    - _Requirements: 8.1, 8.6_
+  - [ ] 5.4 Implement create_user Lambda handler
+    - Create `backend/user/create_user.py`
+    - Validate required fields: full_name, email, department, role, phone_number
+    - Validate email format
+    - Check for duplicate email via GSI1 query (GSI1PK=`EMAIL#{email}`)
+    - Create Cognito user in user pool
+    - Store user record in DynamoDB with PK=`USER#{id}`, SK=`PROFILE`, GSI keys
+    - Return 201 with user data, 400 for validation errors, 409 for duplicate email
+    - _Requirements: 8.2, 9.2, 9.5_
+  - [ ] 5.5 Implement update_user Lambda handler
+    - Create `backend/user/update_user.py`
+    - Validate superuser authorization
+    - Update user fields in DynamoDB and Cognito
+    - Create audit log entry: PK=`USER#{id}`, SK=`AUDIT#{timestamp}` with superuser identity and timestamp
+    - _Requirements: 8.7_
+  - [ ] 5.6 Implement deactivate_user Lambda handler
+    - Create `backend/user/deactivate_user.py`
+    - Set user status to "deactivated" in DynamoDB
+    - Revoke all active Cognito sessions via AdminUserGlobalSignOut
+    - Create audit log entry
+    - _Requirements: 8.5_
+  - [ ] 5.7 Implement enroll_face Lambda handler
+    - Create `backend/user/enroll_face.py`
+    - Accept base64 face image, upload to S3 biometric bucket at `biometric/{user_id}/face.jpg`
+    - Index face in Rekognition collection
+    - Update user record with face_image_s3_key
+    - _Requirements: 6.4, 8.3_
+  - [ ] 5.8 Implement enroll_voice Lambda handler
+    - Create `backend/user/enroll_voice.py`
+    - Accept voice sample audio, upload to S3 biometric bucket at `biometric/{user_id}/voice_enrollment.wav`
+    - Extract voiceprint embedding and store for future comparison
+    - Update user record with voice_sample_s3_key
+    - _Requirements: 7.4, 8.4_
+  - [ ]* 5.9 Write property test: Superuser-only authorization (Property 14)
+    - **Property 14: Superuser-only authorization**
+    - Use Hypothesis to generate random users with non-superuser roles
+    - Assert all user management operations denied with authorization error
+    - **Validates: Requirements 8.1, 8.6**
+  - [ ]* 5.10 Write property test: User creation round-trip (Property 15)
+    - **Property 15: User creation round-trip**
+    - Generate random valid user data (full_name, email, department, role, phone_number)
+    - Create user then retrieve by ID; assert all original fields preserved
+    - **Validates: Requirements 8.2**
+  - [ ]* 5.11 Write property test: User deactivation revokes access (Property 16)
+    - **Property 16: User deactivation revokes access**
+    - Generate random active user accounts, deactivate them
+    - Assert status is "deactivated" and sessions invalidated
+    - **Validates: Requirements 8.5**
+  - [ ]* 5.12 Write property test: User modification audit trail (Property 17)
+    - **Property 17: User modification audit trail**
+    - Generate random user modifications by superusers
+    - Assert audit log entry created with superuser identity and valid timestamp
+    - **Validates: Requirements 8.7**
+  - [ ]* 5.13 Write property test: Registration form validation (Property 18)
+    - **Property 18: Registration form validation**
+    - Generate random form inputs with randomly invalid/missing fields
+    - Assert validation rejects submissions with missing required fields or invalid email format
+    - **Validates: Requirements 9.2**
+  - [ ]* 5.14 Write property test: Duplicate email prevention (Property 19)
+    - **Property 19: Duplicate email prevention**
+    - Generate random email addresses, create user, attempt duplicate creation
+    - Assert second creation rejected
+    - **Validates: Requirements 9.5**
+  - [ ] 5.15 Commit and push
+    - Stage all user management files, commit with message `Refs #<issue_number> - Implement User Management Service with superuser authorization`
+    - Run `git push -u origin feature/user-management-service`
+
+- [ ] 6. Checkpoint — Auth and User Management verification
+  - Ensure all auth and user management tests pass, ask the user if questions arise.
+
+- [ ] 7. Implement Voice Service — Transcription, synthesis, and voice search
+  - [ ] 7.1 Create Git issue for Voice Service
+    - Run `gh issue create --title "Implement Voice Service - transcription, synthesis, and voice search" --body "Implement transcribe_audio, voice_search, synthesize_speech Lambda handlers with AWS Transcribe and Polly integration."`
+  - [ ] 7.2 Create feature branch
+    - Run `git checkout -b feature/voice-service` from main
+  - [ ] 7.3 Implement transcribe_audio Lambda handler
+    - Create `backend/voice/transcribe_audio.py`
+    - Accept audio_key (S3 key), start Transcribe batch job
+    - Poll GetTranscriptionJob until complete (with timeout)
+    - Return transcribed text
+    - _Requirements: 4.1, 5.1_
+  - [ ] 7.4 Implement synthesize_speech Lambda handler
+    - Create `backend/voice/synthesize_speech.py`
+    - Accept text input, call Polly SynthesizeSpeech
+    - Upload audio to S3 at `audio/polly/{request_id}.mp3`
+    - Return presigned URL for audio playback
+    - _Requirements: 4.5, 5.5_
+  - [ ] 7.5 Implement voice_search Lambda handler
+    - Create `backend/voice/voice_search.py`
+    - Upload audio to S3, transcribe via Transcribe
+    - Parse transcribed text into search parameters using `parse_voice_query`
+    - Execute search via memo service search logic
+    - Synthesize results summary via Polly
+    - Return search results + audio response URL
+    - Return 422 if query cannot be parsed
+    - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5_
+  - [ ] 7.6 Implement parse_voice_query utility
+    - Create `backend/voice/query_parser.py`
+    - Extract search parameters from natural language: title keywords, date patterns, memo type, person names
+    - Use keyword matching and date pattern recognition (regex for month names, ISO dates, relative dates)
+    - _Requirements: 5.2_
+  - [ ]* 7.7 Write property test: Voice query parse round-trip (Property 11)
+    - **Property 11: Voice query parse round-trip**
+    - Use Hypothesis to generate random combinations of valid search parameters
+    - Format them into natural language query strings, then parse
+    - Assert extracted parameters equivalent to originals
+    - **Validates: Requirements 5.2**
+  - [ ] 7.8 Commit and push
+    - Stage all voice service files, commit with message `Refs #<issue_number> - Implement Voice Service with transcription, synthesis, and voice search`
+    - Run `git push -u origin feature/voice-service`
+
+- [ ] 8. Implement Voice-Guided Memo Registration — Session-based voice flow
+  - [ ] 8.1 Create Git issue for Voice-Guided Memo Registration
+    - Run `gh issue create --title "Implement voice-guided memo registration session flow" --body "Implement start_memo_session, submit_session_field, review_memo_session, and confirm_memo_session Lambda handlers for field-by-field voice memo registration."`
+  - [ ] 8.2 Create feature branch
+    - Run `git checkout -b feature/voice-memo-registration` from main
+  - [ ] 8.3 Implement start_memo_session Lambda handler
+    - Create `backend/voice/start_memo_session.py`
+    - Generate session_id (UUID), create Voice Session item in DynamoDB with TTL (1 hour)
+    - Generate first field prompt audio ("What is the memo title?") via Polly
+    - Return session_id, prompt_audio_url, current_field="title", fields_remaining
+    - _Requirements: 4.6_
+  - [ ] 8.4 Implement submit_session_field Lambda handler
+    - Create `backend/voice/submit_session_field.py`
+    - Retrieve session from DynamoDB by PK=`VSESSION#{session_id}`
+    - Upload field audio to S3 at `audio/voice-sessions/{session_id}/{field_name}.wav`
+    - Transcribe audio via Transcribe
+    - Validate transcribed value for current field
+    - Update session: store field value, advance current_field, update retry_counts
+    - If more fields: generate next prompt via Polly, return next_prompt_audio_url
+    - If all fields collected: return status="fields_complete" with collected_data
+    - On transcription failure: increment retry_count; if < 2, re-prompt; if >= 2, return FIELD_RETRY_EXCEEDED with cancel/manual options
+    - Determine correct person field prompt based on memo_type ("Who brought in this memo?" vs "Who took out this memo?")
+    - _Requirements: 4.6, 4.7, 4.8_
+  - [ ] 8.5 Implement review_memo_session Lambda handler
+    - Create `backend/voice/review_memo_session.py`
+    - Retrieve session, validate all fields collected
+    - Format review summary text using REVIEW_TEMPLATE from design
+    - Generate review audio via Polly
+    - Return review_audio_url and collected_data
+    - _Requirements: 4.9_
+  - [ ] 8.6 Implement confirm_memo_session Lambda handler
+    - Create `backend/voice/confirm_memo_session.py`
+    - Transcribe confirmation audio, check for "yes"/"no"
+    - If confirmed: create memo via memo service, update session status to "saved", generate confirmation audio
+    - If rejected: return collected_data with re-record/cancel options and prompt audio
+    - If unclear: return CONFIRMATION_UNCLEAR error with re-prompt audio
+    - _Requirements: 4.10, 4.11_
+  - [ ]* 8.7 Write property test: Voice session field prompt ordering (Property 22)
+    - **Property 22: Voice session field prompt ordering**
+    - Use Hypothesis to generate random memo types (incoming/outgoing) and session states
+    - Assert fields prompted in order: title → memo_type → memo_date → person
+    - Assert person prompt matches memo_type ("Who brought in..." for incoming, "Who took out..." for outgoing)
+    - **Validates: Requirements 4.6**
+  - [ ]* 8.8 Write property test: Voice session retry logic (Property 23)
+    - **Property 23: Voice session retry logic**
+    - Generate random fields and retry counts (0–3), mock Transcribe failures
+    - Assert re-prompt if retry_count < 2; offer cancel/manual if retry_count >= 2
+    - **Validates: Requirements 4.8**
+  - [ ]* 8.9 Write property test: Voice session review completeness (Property 24)
+    - **Property 24: Voice session review completeness**
+    - Generate random complete field sets (titles, types, dates, person names)
+    - Assert generated review summary text contains every collected field value
+    - **Validates: Requirements 4.9**
+  - [ ]* 8.10 Write property test: Voice session confirmation round-trip (Property 25)
+    - **Property 25: Voice session confirmation round-trip**
+    - Generate random valid field sets, mock Transcribe for "yes" confirmation
+    - Confirm session, retrieve created memo by ID, assert all field values match
+    - **Validates: Requirements 4.10**
+  - [ ] 8.11 Commit and push
+    - Stage all voice-guided registration files, commit with message `Refs #<issue_number> - Implement voice-guided memo registration session flow`
+    - Run `git push -u origin feature/voice-memo-registration`
+
+- [ ] 9. Checkpoint — Voice Service verification
+  - Ensure all voice service and voice-guided registration tests pass, ask the user if questions arise.
+
+- [ ] 10. Implement Mobile App — Authentication and navigation
+  - [ ] 10.1 Create Git issue for Mobile App auth and navigation
+    - Run `gh issue create --title "Implement Mobile App authentication and navigation" --body "Build React Native LoginScreen with biometric auth, DashboardScreen, and navigation structure."`
+  - [ ] 10.2 Create feature branch
+    - Run `git checkout -b feature/mobile-auth-navigation` from main
+  - [ ] 10.3 Implement LoginScreen with biometric authentication
+    - Create `mobile/src/screens/LoginScreen.tsx`
+    - Integrate device camera for facial capture
+    - Integrate device microphone for voice capture as fallback
+    - Call Cognito InitiateAuth with CUSTOM_AUTH flow
+    - Handle challenge responses (capture face → submit → receive tokens)
+    - Handle auth failure with retry and voice fallback
+    - Request camera and microphone permissions with explanatory messages on denial
+    - _Requirements: 6.1, 6.3, 6.5, 7.1, 7.3, 11.4, 11.5_
+  - [ ] 10.4 Implement DashboardScreen
+    - Create `mobile/src/screens/DashboardScreen.tsx`
+    - Quick action buttons: Register Memo, Search Memos, Voice Input
+    - Navigation to MemoFormScreen, SearchScreen, VoiceMemoRegistrationScreen
+    - _Requirements: 11.1_
+  - [ ] 10.5 Implement API client and token management
+    - Create `mobile/src/api/client.ts` with Axios/fetch wrapper for API Gateway endpoints
+    - Enforce HTTPS for all requests
+    - Implement token storage, auto-refresh, and 401 interception for re-authentication
+    - Implement offline detection with clear notification and operation queuing via AsyncStorage
+    - _Requirements: 11.2, 11.3, 12.2, 12.3, 12.4_
+  - [ ]* 10.6 Write property test: Token expiry invariant (Property 21)
+    - **Property 21: Token expiry invariant**
+    - Generate random token issuance times
+    - Assert token expiry is at most 1 hour from issuance
+    - **Validates: Requirements 12.3**
+  - [ ]* 10.7 Write property test: Offline operation queuing round-trip (Property 20)
+    - **Property 20: Offline operation queuing round-trip**
+    - Generate random sets of operations submitted offline
+    - Assert all operations queued and submitted in order when connectivity restored
+    - **Validates: Requirements 11.3**
+  - [ ] 10.8 Commit and push
+    - Stage all mobile auth/navigation files, commit with message `Refs #<issue_number> - Implement Mobile App authentication and navigation`
+    - Run `git push -u origin feature/mobile-auth-navigation`
+
+- [ ] 11. Implement Mobile App — Memo registration and search screens
+  - [ ] 11.1 Create Git issue for Memo screens
+    - Run `gh issue create --title "Implement Mobile App memo registration and search screens" --body "Build MemoFormScreen, SearchScreen, MemoDetailScreen, and VoiceMemoRegistrationScreen in React Native."`
+  - [ ] 11.2 Create feature branch
+    - Run `git checkout -b feature/mobile-memo-screens` from main
+  - [ ] 11.3 Implement MemoFormScreen
+    - Create `mobile/src/screens/MemoFormScreen.tsx`
+    - Form fields: title, memo_type (incoming/outgoing toggle), memo_date (date picker), person_brought_in or person_took_out (conditional on type)
+    - Client-side validation matching backend rules
+    - Submit to POST /memos endpoint
+    - _Requirements: 1.1, 1.3, 1.4, 1.6_
+  - [ ] 11.4 Implement SearchScreen
+    - Create `mobile/src/screens/SearchScreen.tsx`
+    - Text search with filters: title, date range, memo type, person name
+    - Voice search button that records audio and calls POST /voice/search
+    - Display results list with memo summaries
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 5.1_
+  - [ ] 11.5 Implement MemoDetailScreen
+    - Create `mobile/src/screens/MemoDetailScreen.tsx`
+    - Display all memo metadata fields
+    - Show notes list with option to add text or voice notes
+    - Voice note: record audio → POST /voice/transcribe → POST /memos/{id}/notes
+    - Read notes aloud button: POST /voice/synthesize → play audio
+    - _Requirements: 2.5, 4.1, 4.2, 4.5_
+  - [ ] 11.6 Implement VoiceMemoRegistrationScreen
+    - Create `mobile/src/screens/VoiceMemoRegistrationScreen.tsx`
+    - Start session: POST /voice/memo-session/start → play prompt audio
+    - Field-by-field loop: record response → POST /voice/memo-session/{id}/field → play next prompt
+    - Track session state on client (current_field, fields_remaining, collected_data)
+    - Review step: POST /voice/memo-session/{id}/review → play review audio
+    - Confirmation: record yes/no → POST /voice/memo-session/{id}/confirm
+    - Handle rejection: offer re-record individual fields or cancel
+    - Handle transcription failures with retry prompts
+    - _Requirements: 4.6, 4.7, 4.8, 4.9, 4.10, 4.11_
+  - [ ] 11.7 Commit and push
+    - Stage all memo screen files, commit with message `Refs #<issue_number> - Implement Mobile App memo registration and search screens`
+    - Run `git push -u origin feature/mobile-memo-screens`
+
+- [ ] 12. Implement Mobile App — User management screens (Superuser)
+  - [ ] 12.1 Create Git issue for User Management screens
+    - Run `gh issue create --title "Implement Mobile App user management screens" --body "Build UserManagementScreen, UserRegistrationForm, and BiometricEnrollmentScreen for superuser operations."`
+  - [ ] 12.2 Create feature branch
+    - Run `git checkout -b feature/mobile-user-management` from main
+  - [ ] 12.3 Implement UserManagementScreen
+    - Create `mobile/src/screens/UserManagementScreen.tsx`
+    - List users by role (query GSI2)
+    - Actions: create new user, edit user, deactivate user
+    - Only accessible to superuser role
+    - _Requirements: 8.1, 8.6_
+  - [ ] 12.4 Implement UserRegistrationForm
+    - Create `mobile/src/screens/UserRegistrationForm.tsx`
+    - Form fields: full_name, email, department, role (Regular_User/Superuser picker), phone_number
+    - Client-side validation: all fields required, email format check
+    - Highlight invalid fields with specific error messages on validation failure
+    - Check duplicate email before submission via API
+    - On success, navigate to BiometricEnrollmentScreen
+    - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5_
+  - [ ] 12.5 Implement BiometricEnrollmentScreen
+    - Create `mobile/src/screens/BiometricEnrollmentScreen.tsx`
+    - Facial enrollment: capture face image via camera → POST /users/{id}/enroll-face
+    - Voice enrollment: capture voice sample via microphone → POST /users/{id}/enroll-voice
+    - Guide superuser through both enrollment steps sequentially
+    - _Requirements: 6.4, 7.4, 8.3, 8.4_
+  - [ ] 12.6 Commit and push
+    - Stage all user management screen files, commit with message `Refs #<issue_number> - Implement Mobile App user management screens`
+    - Run `git push -u origin feature/mobile-user-management`
+
+- [ ] 13. Checkpoint — Mobile App verification
+  - Ensure all mobile app tests pass (Jest + React Native Testing Library), ask the user if questions arise.
+
+- [ ] 14. Implement infrastructure configuration and security
+  - [ ] 14.1 Create Git issue for infrastructure and security
+    - Run `gh issue create --title "Implement infrastructure configuration and security" --body "Create SAM/CloudFormation template for DynamoDB, S3, Lambda, API Gateway, Cognito with encryption and free-tier compliance."`
+  - [ ] 14.2 Create feature branch
+    - Run `git checkout -b feature/infrastructure-security` from main
+  - [ ] 14.3 Create SAM/CloudFormation template
+    - Create `backend/template.yaml` (AWS SAM template)
+    - Define DynamoDB table `MemoTrackerTable` with PK/SK, GSI1, GSI2, encryption at rest enabled
+    - Define S3 buckets: `memo-tracker-biometric-{env}` (access-restricted, encryption) and `memo-tracker-audio-{env}` (encryption)
+    - Define Lambda functions for all handlers with correct IAM roles
+    - Restrict access log Lambda role to PutItem only for LOG# SK patterns
+    - Define API Gateway REST API with HTTPS enforcement, Cognito authorizer
+    - Define Cognito User Pool with custom auth flow enabled
+    - Configure all resources within free-tier limits
+    - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 10.8, 12.1, 12.2, 12.5_
+  - [ ] 14.4 Create IAM policies
+    - Define least-privilege IAM roles for each Lambda function group
+    - Auth Lambdas: Rekognition, S3 biometric bucket read, DynamoDB read/write
+    - Memo Lambdas: DynamoDB read/write, S3 audio bucket
+    - Voice Lambdas: Transcribe, Polly, S3 audio bucket, DynamoDB read/write
+    - User Lambdas: Cognito admin, DynamoDB read/write, S3 biometric bucket write, Rekognition
+    - _Requirements: 12.5_
+  - [ ]* 14.5 Write smoke tests for infrastructure
+    - Test DynamoDB table exists with correct key schema and GSIs
+    - Test S3 buckets exist with encryption enabled and correct access policies
+    - Test biometric and audio buckets are separate
+    - Test API Gateway enforces HTTPS
+    - Test Lambda functions have correct IAM roles
+    - Test Cognito user pool has custom auth flow enabled
+    - _Requirements: 10.1, 10.2, 10.3, 10.8, 12.1, 12.2, 12.5_
+  - [ ] 14.6 Commit and push
+    - Stage all infrastructure files, commit with message `Refs #<issue_number> - Implement infrastructure configuration and security`
+    - Run `git push -u origin feature/infrastructure-security`
+
+- [ ] 15. Wire all components together and integration testing
+  - [ ] 15.1 Create Git issue for integration wiring
+    - Run `gh issue create --title "Wire all components together and integration testing" --body "Connect all Lambda handlers to API Gateway routes, wire Cognito triggers, and write integration tests for end-to-end flows."`
+  - [ ] 15.2 Create feature branch
+    - Run `git checkout -b feature/integration-wiring` from main
+  - [ ] 15.3 Wire API Gateway routes to Lambda handlers
+    - Update `backend/template.yaml` with all API Gateway route → Lambda mappings
+    - Wire Cognito custom auth triggers (DefineAuthChallenge, CreateAuthChallenge, VerifyAuthChallengeResponse)
+    - Ensure all endpoints require Cognito authorizer except public health check
+    - Verify CORS configuration for mobile app
+    - _Requirements: 10.3, 11.2, 12.2_
+  - [ ] 15.4 Wire mobile app API client to all endpoints
+    - Update `mobile/src/api/client.ts` with all endpoint definitions matching API Gateway routes
+    - Ensure all memo, voice, user management, and auth endpoints are connected
+    - Verify offline queuing works for all write operations
+    - _Requirements: 11.2, 11.3_
+  - [ ]* 15.5 Write integration tests
+    - Test Rekognition: IndexFaces during enrollment, CompareFaces during auth
+    - Test Transcribe: batch transcription job lifecycle
+    - Test Polly: SynthesizeSpeech returns valid audio
+    - Test DynamoDB: CRUD operations, GSI queries, conditional writes, voice session lifecycle
+    - Test S3: biometric upload/retrieval, audio file lifecycle, voice session audio storage
+    - Test Cognito: user pool operations, custom auth flow end-to-end
+    - Test API Gateway: endpoint routing, authorization headers, CORS
+    - Test voice-guided registration end-to-end: full session lifecycle (start → fields → review → confirm → memo created)
+    - _Requirements: 1.1, 2.1, 3.1, 4.1, 5.1, 6.1, 7.1, 8.2, 4.6, 4.10_
+  - [ ] 15.6 Commit and push
+    - Stage all integration files, commit with message `Refs #<issue_number> - Wire all components and add integration tests`
+    - Run `git push -u origin feature/integration-wiring`
+
+- [ ] 16. Final checkpoint — Ensure all tests pass
+  - Ensure all tests pass (backend pytest + Hypothesis, mobile Jest), ask the user if questions arise.
+
+## Notes
+
+- Tasks marked with `*` are optional and can be skipped for faster MVP
+- Each task references specific requirements for traceability
+- Checkpoints ensure incremental validation
+- Property tests validate universal correctness properties from the design document using Hypothesis (Python) and Jest (React Native)
+- Unit tests validate specific examples and edge cases
+- Each top-level task includes sub-tasks for Git issue creation, feature branching, implementation, and pushing — replace `<issue_number>` with the actual issue number returned by `gh issue create`
+- All commits should reference their tracking issue using `Refs #N` or `Fixes #N` syntax
